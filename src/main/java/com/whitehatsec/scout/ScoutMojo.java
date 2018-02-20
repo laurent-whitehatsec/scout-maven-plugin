@@ -15,7 +15,6 @@
 package com.whitehatsec.scout;
 
 import org.apache.http.client.utils.URIBuilder;
-import org.apache.maven.artifact.Artifact;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugins.annotations.Component;
@@ -64,8 +63,14 @@ public class ScoutMojo extends AbstractMojo {
     private static final String SCOUT_FINDINGS_COUNT_THRESHOLD_KEY = "scout.findingsCountThreshold";
     private static final String SCOUT_FINDINGS_RATING_THRESHOLD_KEY = "scout.findingsRatingThreshold";
     private static final String SCOUT_DISABLE_BROWSER_LAUNCH = "scout.disableBrowserLaunch";
+    private static final String SCOUT_AUTH_TYPE = "scout.authType";
     private static final Pattern VALID_SCAN_TAG_REG_EX = Pattern.compile("^[0-9A-Za-z_.\\- ]{1,100}$");
     private static final Pattern VALID_INCLUDE_EXCLUDE_REG_EX = Pattern.compile("^[0-9A-Za-z_.\\- ]+$");
+
+    public enum AuthType {
+        UsernameAndPassword,
+        APIKey
+    }
 
     /**
      * The Maven project.
@@ -75,6 +80,9 @@ public class ScoutMojo extends AbstractMojo {
 
     @Parameter(defaultValue = "${settings}", readonly = true, required = true)
     private Settings settings;
+
+    @Parameter(property = SCOUT_AUTH_TYPE, defaultValue = "UsernameAndPassword")
+    private AuthType authType;
 
     /**
      * Scout username. If not given, it will be looked up through <code>settings.xml</code>'s server with
@@ -94,6 +102,9 @@ public class ScoutMojo extends AbstractMojo {
     @Parameter(property = "password")
     private String password;
 
+    @Parameter(property = "apiKey")
+    private String apiKey;
+
     /**
      * Server's <code>id</code> in <code>settings.xml</code> to look up username and password. Defaults to
      * <code>myscan.whitehatsec.com</code> if not given.
@@ -108,6 +119,27 @@ public class ScoutMojo extends AbstractMojo {
 
     @Parameter(defaultValue = "${project.build.outputDirectory}")
     private File outputDirectory;
+
+    @Parameter(property = SCOUT_INCLUSIONS_KEY)
+    private String inclusions;
+
+    @Parameter(property = SCOUT_EXCLUSIONS_KEY)
+    private String exclusions;
+
+    @Parameter(property = SCOUT_ASYNC_MODE_KEY)
+    private boolean asyncMode;
+
+    @Parameter(property = SCOUT_FINDINGS_COUNT_THRESHOLD_KEY, defaultValue = "0")
+    private int findingsCountThreshold;
+
+    @Parameter(property = SCOUT_FINDINGS_RATING_THRESHOLD_KEY, defaultValue = "Note")
+    private Rating findingsRatingThreshold;
+
+    @Parameter(defaultValue = "${project.artifact.file}")
+    private File scanArtifact;
+
+    @Parameter(property = SCOUT_TAG_KEY)
+    private String tag;
 
     private static String[] filterList(String filterString) {
         if (filterString == null) {
@@ -157,7 +189,7 @@ public class ScoutMojo extends AbstractMojo {
 
         this.getLog().info("WhiteHat Scout");
 
-        if (Boolean.getBoolean(this.project.getModel().getProperties().getProperty(SCOUT_TRACE_HTTP_KEY, "false"))) {
+        if (Boolean.parseBoolean(this.project.getModel().getProperties().getProperty(SCOUT_TRACE_HTTP_KEY, "false"))) {
             enableTraceLogging();
         }
 
@@ -165,54 +197,64 @@ public class ScoutMojo extends AbstractMojo {
             this.settingsKey = DEFAULT_SCOUT_ADDRESS;
         }
 
-        if ((this.username == null || this.password == null) && (settings != null)) {
+        if (settings != null) {
+
             Server server = this.settings.getServer(this.settingsKey);
 
             if (server != null) {
-                if (this.username == null) {
-                    this.username = server.getUsername();
-                }
+                if (this.authType == AuthType.UsernameAndPassword) {
+                    if (this.username == null) {
+                        this.username = server.getUsername();
+                    }
 
-                if (this.password == null && server.getPassword() != null) {
-                    try {
-                        this.password = securityDispatcher.decrypt(server.getPassword());
-                    } catch (SecDispatcherException e) {
-                        throw new MojoExecutionException(e.getMessage());
+                    if (this.password == null && server.getPassword() != null) {
+                        try {
+                            this.password = securityDispatcher.decrypt(server.getPassword());
+                        } catch (SecDispatcherException e) {
+                            throw new MojoExecutionException(e.getMessage());
+                        }
+                    }
+                } else {
+                    if (this.apiKey == null && server.getPassword() != null) {
+                        try {
+                            this.apiKey = securityDispatcher.decrypt(server.getPassword());
+                        } catch (SecDispatcherException e) {
+                            throw new MojoExecutionException(e.getMessage());
+                        }
                     }
                 }
             }
         }
 
-        if (this.password == null || this.username == null) {
-            throw new MojoExecutionException("WhiteHat Scout username and password must be provided to upload artifact");
+        if ((this.authType == AuthType.UsernameAndPassword && (this.password == null || this.username == null))
+                || (this.authType == AuthType.APIKey && this.apiKey == null)) {
+            throw new MojoExecutionException("WhiteHat Scout username/password or apiKey/appName must be provided to upload artifact");
         }
 
         Properties props = project.getModel().getProperties();
 
         boolean disableCertValidation = Boolean.parseBoolean(props.getProperty(SCOUT_DISABLE_CERT_VALIDATION_KEY, "false"));
 
-        String[] inclusions = filterList(props.getProperty(SCOUT_INCLUSIONS_KEY));
+        String[] inclusions = filterList(this.inclusions);
 
         if (inclusions != null) {
-            for (String inclusion: inclusions) {
+            for (String inclusion : inclusions) {
                 if (!VALID_INCLUDE_EXCLUDE_REG_EX.matcher(inclusion).matches()) {
                     throw new MojoExecutionException("Invalid inclusions property. Provide valid Java package names, Use a comma to separate the items in the list.");
                 }
             }
         }
 
-        String[] exclusions = filterList(props.getProperty(SCOUT_EXCLUSIONS_KEY));
+        String[] exclusions = filterList(this.exclusions);
         if (exclusions != null) {
-            for (String exclusion: exclusions) {
+            for (String exclusion : exclusions) {
                 if (!VALID_INCLUDE_EXCLUDE_REG_EX.matcher(exclusion).matches()) {
                     throw new MojoExecutionException("Invalid exclusions property. Provide valid Java package names, Use a comma to separate the items in the list.");
                 }
             }
         }
 
-        String tag = props.getProperty(SCOUT_TAG_KEY);
-
-        if (tag != null && !VALID_SCAN_TAG_REG_EX.matcher(tag).matches()) {
+        if (this.tag != null && !VALID_SCAN_TAG_REG_EX.matcher(this.tag).matches()) {
             throw new MojoExecutionException("Invalid tag property. The tag should be 100 characters or less and may use letters, capital letters, and numerals, plus underscore, period, hyphen, and the space character.");
         }
 
@@ -230,7 +272,7 @@ public class ScoutMojo extends AbstractMojo {
 
             String[] paths = directoryScanner.getIncludedFiles();
 
-            for (String p: paths) {
+            for (String p : paths) {
                 Path path = Paths.get(p);
                 inclusionSet.add(path.getParent().toString().replace(File.separatorChar, '.'));
             }
@@ -238,15 +280,13 @@ public class ScoutMojo extends AbstractMojo {
             inclusions = inclusionSet.toArray(new String[0]);
         }
 
-        Artifact artifact = this.project.getArtifact();
-
-        if (artifact == null || artifact.getFile() == null || !artifact.getFile().exists()) {
+        if (this.scanArtifact == null || !this.scanArtifact.exists()) {
             throw new MojoExecutionException("Could not find artifact to scan. Make sure scan goal is executed after after Maven install lifecycle phase");
         }
 
         URI scoutUri = getURI();
 
-        ScanRunner runner = new ScanRunner.Builder()
+        ScanRunner.Builder builder = new ScanRunner.Builder()
                 .withProgressLogger(new ScanRunner.ProgressLogger() {
                     @Override
                     public void log(String progress) {
@@ -255,17 +295,20 @@ public class ScoutMojo extends AbstractMojo {
                 })
                 .withScoutUri(scoutUri)
                 .withDisableCertValidation(disableCertValidation)
-                .withUsername(this.username)
-                .withPassword(this.password)
-                .withScanFile(artifact.getFile())
-                .withTag(tag)
+                .withScanFile(this.scanArtifact)
+                .withTag(this.tag)
                 .withInclusions(inclusions)
-                .withExclusions(exclusions)
-                .build();
+                .withExclusions(exclusions);
 
-        boolean asyncMode = Boolean.parseBoolean(this.project.getModel().getProperties().getProperty(SCOUT_ASYNC_MODE_KEY, "false"));
+        if (this.authType == AuthType.UsernameAndPassword) {
+            builder = builder.withUsername(this.username).withPassword(this.password);
+        } else {
+            builder = builder.withAPIKey(this.apiKey);
+        }
 
-        if (asyncMode) {
+        ScanRunner runner = builder.build();
+
+        if (this.asyncMode) {
             runner.executeAsync();
             getLog().info(String.format("WhiteHat Scout scan scheduled in asynchronous mode, see results at %s", scoutUri.toASCIIString()));
         } else {
@@ -273,13 +316,11 @@ public class ScoutMojo extends AbstractMojo {
 
             int findingsCount = findings.getCount();
 
-            Rating findingsRatingThreshold = Rating.fromText(this.project.getModel().getProperties().getProperty(SCOUT_FINDINGS_RATING_THRESHOLD_KEY, "Note"));
-
-            if (findingsRatingThreshold != Rating.Note) {
+            if (this.findingsRatingThreshold != Rating.Note) {
                 findingsCount = 0;
                 for (Rating r : findings.getRatings()) {
-                    assert findingsRatingThreshold != null;
-                    if (r.getRisk() >= findingsRatingThreshold.getRisk()) {
+                    assert this.findingsRatingThreshold != null;
+                    if (r.getRisk() >= this.findingsRatingThreshold.getRisk()) {
                         findingsCount++;
                     }
                 }
@@ -288,8 +329,6 @@ public class ScoutMojo extends AbstractMojo {
                     getLog().info(String.format("Ignoring %d findings below the configured %s threshold", findings.getCount() - findingsCount, findingsRatingThreshold.getDisplayName()));
                 }
             }
-
-            int findingsCountThreshold = Integer.parseInt(this.project.getModel().getProperties().getProperty(SCOUT_FINDINGS_COUNT_THRESHOLD_KEY, "0"));
 
             URI scanResultsURI;
 
@@ -300,7 +339,7 @@ public class ScoutMojo extends AbstractMojo {
                 throw new MojoExecutionException("Invalid URI", e);
             }
 
-            if (findingsCount > 0 && findingsCount >= findingsCountThreshold) {
+            if (findingsCount > 0 && findingsCount >= this.findingsCountThreshold) {
                 try {
                     boolean disableBrowserLaunch = Boolean.parseBoolean(this.project.getModel().getProperties().getProperty(SCOUT_DISABLE_BROWSER_LAUNCH, "false"));
                     if (!disableBrowserLaunch && Desktop.isDesktopSupported()) {
@@ -313,7 +352,7 @@ public class ScoutMojo extends AbstractMojo {
                 throw new MojoExecutionException(String.format("%d security findings detected during scan", findingsCount));
             } else if (findings.getCount() != 0) {
                 getLog().info(String.format("Findings report available at URL %s", scanResultsURI.toASCIIString()));
-                getLog().info(String.format("Ignoring scan results with %d findings. Number of findings below configured threshold [%d].", findingsCount, findingsCountThreshold));
+                getLog().info(String.format("Ignoring scan results with %d findings. Number of findings below configured threshold [%d].", findingsCount, this.findingsCountThreshold));
             } else {
                 getLog().info("WhiteHat Scout: No findings detected");
             }
