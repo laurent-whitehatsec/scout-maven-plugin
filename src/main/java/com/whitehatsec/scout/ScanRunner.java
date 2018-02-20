@@ -28,14 +28,10 @@ import org.apache.http.client.utils.URIBuilder;
 import org.apache.http.entity.ContentType;
 import org.apache.http.impl.client.BasicCookieStore;
 import org.apache.http.impl.client.HttpClientBuilder;
-import org.apache.http.message.BasicHeader;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
-import org.joda.time.format.DateTimeFormatter;
-import org.joda.time.format.ISODateTimeFormat;
-import org.joda.time.format.PeriodFormatter;
-import org.joda.time.format.PeriodFormatterBuilder;
+import org.joda.time.format.*;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
@@ -47,14 +43,12 @@ import java.net.URISyntaxException;
 import java.security.GeneralSecurityException;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
-import java.util.Collections;
 
 class ScanRunner {
 
     private final ProgressLogger progressLogger;
     private final String username;
     private final String password;
-    private final String apiKey;
     private final URI scoutUri;
     private final String[] inclusions;
     private final String[] exclusions;
@@ -63,12 +57,11 @@ class ScanRunner {
     private final ObjectMapper mapper;
     private final Executor executor;
 
-    private ScanRunner(ProgressLogger progressLogger, boolean disableCertValidation, URI scoutUri, String username, String password, String apiKey, File scanFile, String tag, String[] inclusions, String[] exclusions) throws MojoExecutionException {
+    private ScanRunner(ProgressLogger progressLogger, boolean disableCertValidation, URI scoutUri, String username, String password, File scanFile, String tag, String[] inclusions, String[] exclusions) throws MojoExecutionException {
         this.progressLogger = progressLogger;
         this.scoutUri = scoutUri;
         this.username = username;
         this.password = password;
-        this.apiKey = apiKey;
         this.scanFile = scanFile;
         this.tag = tag;
         this.inclusions = inclusions;
@@ -106,10 +99,6 @@ class ScanRunner {
             builder.setSSLContext(sslContext);
         }
 
-        if (this.apiKey != null) {
-            builder.setDefaultHeaders(Collections.singletonList(new BasicHeader("api-key", this.apiKey)));
-        }
-
         HttpClient httpClient = builder.build();
 
         this.executor = Executor.newInstance(httpClient);
@@ -131,10 +120,6 @@ class ScanRunner {
     }
 
     private void login() throws MojoExecutionException {
-        if (this.apiKey != null) {
-            return;
-        }
-
         // Log in to Scout
         try {
             LoginBody loginBody = new LoginBody(this.username, this.password);
@@ -179,8 +164,6 @@ class ScanRunner {
 
             URI uploadFileURI = this.scoutUri.resolve("/api/uploadFile" + putURL.getPath() + "?" + putURL.getQuery());
 
-            response.discardContent();
-
             response = this.executor.execute(Request.Put(uploadFileURI).bodyFile(this.scanFile, ContentType.APPLICATION_OCTET_STREAM));
 
             if (response.returnResponse().getStatusLine().getStatusCode() != HttpStatus.SC_OK) {
@@ -188,8 +171,6 @@ class ScanRunner {
             }
 
             this.progressLogger.log("Artifact uploaded");
-
-            response.discardContent();
 
             return scanID;
         } catch (IOException e) {
@@ -240,8 +221,6 @@ class ScanRunner {
             JsonNode responseBody = this.mapper.readTree(httpResponse.getEntity().getContent());
             String scanStatusString = responseBody.get("status").asText();
 
-            response.discardContent();
-
             return ScanStatus.fromStatus(scanStatusString);
         } catch (IOException e) {
             throw new MojoExecutionException("Failed to retrieve scan status from WhiteHat Security Scout", e);
@@ -266,8 +245,6 @@ class ScanRunner {
             DateTime createdOnDateTime = formatter.parseDateTime(createdOn);
             DateTime completedOnDateTime = formatter.parseDateTime(completedOn);
             Duration scanDuration = new Duration(createdOnDateTime, completedOnDateTime);
-
-            response.discardContent();
 
             return new ScanStats(scanDuration);
         } catch (IOException e) {
@@ -317,8 +294,6 @@ class ScanRunner {
                 }
             }
 
-            response.discardContent();
-
             return ratings;
         } catch (IOException e) {
             throw new MojoExecutionException("Failed to retrieve scan status from WhiteHat Security Scout", e);
@@ -326,17 +301,12 @@ class ScanRunner {
     }
 
     private void logout() throws MojoExecutionException {
-        if (this.apiKey != null) {
-            return;
-        }
-
         try {
             URI logoutURI = this.scoutUri.resolve("/api/logout");
             Response response = this.executor.execute(Request.Post(logoutURI).setHeader(HttpHeaders.CONTENT_TYPE, ContentType.APPLICATION_JSON.getMimeType()));
             if (response.returnResponse().getStatusLine().getStatusCode() != HttpStatus.SC_OK) {
                 throw new MojoExecutionException("Failed to log out from WhiteHat Security Scout");
             }
-            response.discardContent();
         } catch (IOException e) {
             throw new MojoExecutionException("Failed to send logout request to WhiteHat Security Scout Server", e);
         }
@@ -396,14 +366,13 @@ class ScanRunner {
         private boolean disableCertValidation;
         private String username;
         private String password;
-        private String apiKey;
         private File scanFile;
         private String tag;
         private String[] inclusions;
         private String[] exclusions;
 
         ScanRunner build() throws MojoExecutionException {
-            return new ScanRunner(this.progressLogger, this.disableCertValidation, this.scoutUri, this.username, this.password, this.apiKey, this.scanFile, this.tag, this.inclusions, this.exclusions);
+            return new ScanRunner(this.progressLogger, this.disableCertValidation, this.scoutUri, this.username, this.password, this.scanFile, this.tag, this.inclusions, this.exclusions);
         }
 
         Builder withProgressLogger(ProgressLogger progressLogger) {
@@ -418,11 +387,6 @@ class ScanRunner {
 
         Builder withPassword(String password) {
             this.password = password;
-            return this;
-        }
-
-        Builder withAPIKey(String apiKey) {
-            this.apiKey = apiKey;
             return this;
         }
 
