@@ -232,7 +232,7 @@ public class ScoutMojo extends AbstractMojo {
 
             for (String p: paths) {
                 Path path = Paths.get(p);
-                inclusionSet.add(path.getParent().toString().replace('/', '.'));
+                inclusionSet.add(path.getParent().toString().replace(File.separatorChar, '.'));
             }
 
             inclusions = inclusionSet.toArray(new String[0]);
