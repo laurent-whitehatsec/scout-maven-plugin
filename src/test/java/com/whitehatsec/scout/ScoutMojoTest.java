@@ -38,6 +38,7 @@ public class ScoutMojoTest extends AbstractMojoTestCase {
 
         this.project = new MavenProjectStub();
         setVariableValueToObject( this.mojo, "project", this.project );
+        setVariableValueToObject( this.mojo, "authType", ScoutMojo.AuthType.UsernameAndPassword );
     }
 
     public void testMissingUsernameAndPassword() throws Exception {
@@ -45,7 +46,7 @@ public class ScoutMojoTest extends AbstractMojoTestCase {
             this.mojo.execute();
             fail("Should have failed with missing username and password");
         } catch (MojoExecutionException e) {
-            assertTrue(e.getMessage().contains("username and password"));
+            assertTrue(e.getMessage().contains("username/password"));
         }
     }
 
