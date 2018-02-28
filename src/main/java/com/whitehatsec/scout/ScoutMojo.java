@@ -258,7 +258,7 @@ public class ScoutMojo extends AbstractMojo {
             throw new MojoExecutionException("Invalid tag property. The tag should be 100 characters or less and may use letters, capital letters, and numerals, plus underscore, period, hyphen, and the space character.");
         }
 
-        if (this.outputDirectory != null) {
+        if (this.outputDirectory != null && this.outputDirectory.exists()) {
             Set<String> inclusionSet = new HashSet<>();
             if (inclusions != null) {
                 Collections.addAll(inclusionSet, inclusions);
